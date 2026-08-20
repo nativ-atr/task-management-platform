@@ -1,0 +1,889 @@
+openapi: 3.1.0
+info:
+  title: Extensible Task-Management Platform API
+  version: 1.0.0
+  description: |
+    Versioned REST contract for the D&B task-management assignment.
+
+    The API deliberately does not implement authentication or user management.
+    Mutation requests require an Idempotency-Key. Transition and close requests
+    also require the task version observed by the client.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+security: []
+tags:
+  - name: Health
+  - name: Task Types
+  - name: Users
+  - name: Tasks
+  - name: Task Events
+
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Process liveness probe
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Process is alive.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Dependency readiness probe
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Service and database are ready.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/task-types:
+    get:
+      tags: [Task Types]
+      operationId: listTaskTypes
+      summary: List registered task-type definitions
+      description: Returns creation and presentation metadata for all registered task types.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Registered task types.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaskTypeDefinition'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: List seeded users
+      description: Read-only endpoint. User management is outside scope.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Seeded users.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/users/{userId}/tasks:
+    get:
+      tags: [Users, Tasks]
+      operationId: listAssignedTasks
+      summary: List tasks currently assigned to a user
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/UserId'
+        - name: state
+          in: query
+          required: false
+          description: Filter by open/closed state. Defaults to both.
+          schema:
+            type: string
+            enum: [ALL, OPEN, CLOSED]
+            default: ALL
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Cursor-paginated tasks assigned to the user.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/tasks:
+    get:
+      tags: [Tasks]
+      operationId: listTasks
+      summary: List tasks across all users or one assignee
+      description: |
+        Returns cursor-paginated task read models. Omit assignedUserId to list
+        tasks across all seeded users. totalCount is the complete filtered count,
+        independent of the current page size or cursor.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: assignedUserId
+          in: query
+          required: false
+          description: Optional assignee filter. Omit to include all users.
+          schema:
+            type: string
+            format: uuid
+        - name: state
+          in: query
+          required: false
+          description: Filter by open/closed state. Defaults to both.
+          schema:
+            type: string
+            enum: [ALL, OPEN, CLOSED]
+            default: ALL
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Cursor-paginated tasks matching the filters.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      tags: [Tasks]
+      operationId: createTask
+      summary: Create a task at its type's initial status
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '201':
+          description: Task created, or original successful response replayed for the same key and request.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/tasks/{taskId}:
+    get:
+      tags: [Tasks]
+      operationId: getTask
+      summary: Get a task and its currently available actions
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task read model.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/tasks/{taskId}/transitions:
+    post:
+      tags: [Tasks]
+      operationId: transitionTask
+      summary: Move a task forward or backward and assign its next user
+      description: |
+        The data object is the complete payload for the target status. It replaces
+        the last-submitted payload for that status; it is never partially merged.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionTaskRequest'
+      responses:
+        '200':
+          description: Transition committed, or original successful response replayed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/tasks/{taskId}/close:
+    post:
+      tags: [Tasks]
+      operationId: closeTask
+      summary: Close an open task at its final status
+      description: Closing retains current status and assignee and accepts no task payload or next assignee.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/TaskId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseTaskRequest'
+      responses:
+        '200':
+          description: Task closed, or original successful response replayed.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/tasks/{taskId}/events:
+    get:
+      tags: [Task Events]
+      operationId: listTaskEvents
+      summary: List append-only lifecycle events for a task
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Chronologically ordered task events.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEventPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Optional caller correlation ID. The server returns the accepted or generated value.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Globally unique mutation key retained for at least the configured window, default 24 hours.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor returned by the previous page.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 1024
+
+  headers:
+    RequestId:
+      description: Request correlation ID.
+      schema:
+        type: string
+    IdempotencyReplayed:
+      description: True when the response is the stored result of a completed idempotent request.
+      schema:
+        type: boolean
+        default: false
+
+  responses:
+    BadRequest:
+      description: Malformed request, invalid header, or invalid cursor.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Requested task or user does not exist.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Current-state, version, transition, closure, or idempotency conflict.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        Retry-After:
+          description: Optional retry delay in seconds, used for an in-progress idempotency reservation.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: Unknown task type/status or invalid task-specific target payload.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: A readiness dependency is unavailable.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Unexpected internal failure. No sensitive details are returned.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+
+    TextFieldDefinition:
+      type: object
+      additionalProperties: false
+      required: [kind, name, label, required, minLength]
+      properties:
+        kind:
+          const: TEXT
+        name:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9]*$'
+        label:
+          type: string
+          minLength: 1
+        required:
+          const: true
+        minLength:
+          type: integer
+          minimum: 1
+
+    FixedStringArrayFieldDefinition:
+      type: object
+      additionalProperties: false
+      required: [kind, name, label, required, exactItems, itemMinLength]
+      properties:
+        kind:
+          const: FIXED_STRING_ARRAY
+        name:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9]*$'
+        label:
+          type: string
+          minLength: 1
+        required:
+          const: true
+        exactItems:
+          type: integer
+          minimum: 1
+        itemMinLength:
+          type: integer
+          minimum: 1
+
+    FieldDefinition:
+      oneOf:
+        - $ref: '#/components/schemas/TextFieldDefinition'
+        - $ref: '#/components/schemas/FixedStringArrayFieldDefinition'
+      discriminator:
+        propertyName: kind
+        mapping:
+          TEXT: '#/components/schemas/TextFieldDefinition'
+          FIXED_STRING_ARRAY: '#/components/schemas/FixedStringArrayFieldDefinition'
+
+    TaskTypeStatus:
+      type: object
+      additionalProperties: false
+      required: [status, label, fields]
+      properties:
+        status:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          minLength: 1
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldDefinition'
+
+    TaskTypeDefinition:
+      type: object
+      additionalProperties: false
+      required: [key, label, initialStatus, finalStatus, statuses]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9-]*$'
+        label:
+          type: string
+          minLength: 1
+        initialStatus:
+          const: 1
+        finalStatus:
+          type: integer
+          minimum: 1
+        statuses:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/TaskTypeStatus'
+
+    StatusPayload:
+      type: object
+      additionalProperties: true
+
+    EffectiveData:
+      type: object
+      propertyNames:
+        pattern: '^[1-9][0-9]*$'
+      additionalProperties:
+        $ref: '#/components/schemas/StatusPayload'
+
+    AvailableTransitionAction:
+      type: object
+      additionalProperties: false
+      required:
+        - action
+        - method
+        - href
+        - expectedVersion
+        - targetStatus
+        - targetLabel
+        - direction
+        - requiredFields
+        - currentValues
+      properties:
+        action:
+          const: TRANSITION
+        method:
+          const: POST
+        href:
+          type: string
+          format: uri-reference
+        expectedVersion:
+          type: integer
+          minimum: 1
+        targetStatus:
+          type: integer
+          minimum: 1
+        targetLabel:
+          type: string
+          minLength: 1
+        direction:
+          type: string
+          enum: [FORWARD, BACKWARD]
+        requiredFields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldDefinition'
+        currentValues:
+          $ref: '#/components/schemas/StatusPayload'
+
+    AvailableCloseAction:
+      type: object
+      additionalProperties: false
+      required: [action, method, href, expectedVersion]
+      properties:
+        action:
+          const: CLOSE
+        method:
+          const: POST
+        href:
+          type: string
+          format: uri-reference
+        expectedVersion:
+          type: integer
+          minimum: 1
+
+    AvailableActions:
+      type: object
+      additionalProperties: false
+      required: [transitions, close]
+      properties:
+        transitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailableTransitionAction'
+        close:
+          oneOf:
+            - $ref: '#/components/schemas/AvailableCloseAction'
+            - type: 'null'
+
+    Task:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - typeLabel
+        - currentStatus
+        - currentStatusLabel
+        - state
+        - assignedUser
+        - effectiveData
+        - version
+        - createdAt
+        - updatedAt
+        - closedAt
+        - availableActions
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        typeLabel:
+          type: string
+        currentStatus:
+          type: integer
+          minimum: 1
+        currentStatusLabel:
+          type: string
+        state:
+          type: string
+          enum: [OPEN, CLOSED]
+        assignedUser:
+          $ref: '#/components/schemas/User'
+        effectiveData:
+          $ref: '#/components/schemas/EffectiveData'
+        version:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: [string, 'null']
+          format: date-time
+        availableActions:
+          $ref: '#/components/schemas/AvailableActions'
+
+    CreateTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [type, assignedUserId]
+      properties:
+        type:
+          type: string
+          pattern: '^[a-z][a-z0-9-]*$'
+        assignedUserId:
+          type: string
+          format: uuid
+
+    TransitionTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [targetStatus, nextAssignedUserId, expectedVersion, data]
+      properties:
+        targetStatus:
+          type: integer
+          minimum: 1
+        nextAssignedUserId:
+          type: string
+          format: uuid
+        expectedVersion:
+          type: integer
+          minimum: 1
+        data:
+          $ref: '#/components/schemas/StatusPayload'
+
+    CloseTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+
+    TaskPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, totalCount]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        nextCursor:
+          type: [string, 'null']
+        totalCount:
+          type: integer
+          minimum: 0
+
+    TaskEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - taskId
+        - eventType
+        - fromStatus
+        - toStatus
+        - fromAssignedUserId
+        - toAssignedUserId
+        - payload
+        - taskVersion
+        - requestId
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        taskId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum: [TASK_CREATED, STATUS_CHANGED, TASK_CLOSED]
+        fromStatus:
+          type: [integer, 'null']
+          minimum: 1
+        toStatus:
+          type: integer
+          minimum: 1
+        fromAssignedUserId:
+          type: [string, 'null']
+          format: uuid
+        toAssignedUserId:
+          type: string
+          format: uuid
+        payload:
+          $ref: '#/components/schemas/StatusPayload'
+        taskVersion:
+          type: integer
+          minimum: 1
+        requestId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+
+    TaskEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskEvent'
+        nextCursor:
+          type: [string, 'null']
+
+    ErrorObject:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          enum:
+            - BAD_REQUEST
+            - INVALID_CURSOR
+            - TASK_NOT_FOUND
+            - USER_NOT_FOUND
+            - TASK_TYPE_NOT_FOUND
+            - STATUS_NOT_DEFINED
+            - PAYLOAD_VALIDATION_FAILED
+            - INVALID_TRANSITION
+            - SAME_STATUS_TRANSITION
+            - FORWARD_SKIP_NOT_ALLOWED
+            - TASK_CLOSED
+            - NOT_FINAL_STATUS
+            - VERSION_CONFLICT
+            - IDEMPOTENCY_KEY_REUSED
+            - IDEMPOTENCY_IN_PROGRESS
+            - INTERNAL_ERROR
+            - SERVICE_UNAVAILABLE
+        message:
+          type: string
+          minLength: 1
+        details:
+          type: object
+          additionalProperties: true
+        requestId:
+          type: string
+          minLength: 1
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorObject'

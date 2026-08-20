@@ -1,0 +1,34 @@
+{
+  "name": "task-management-platform",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "lint": "npm run lint -w server && npm run lint -w client",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "openapi:validate": "node scripts/validate-openapi.mjs",
+    "test": "npm run test -w server && npm run test -w client",
+    "test:integration": "npm run test:integration -w server",
+    "test:e2e": "npm run test:e2e -w client",
+    "test:e2e:fullstack": "npm run test:e2e:fullstack -w client",
+    "build": "npm run build -w server && npm run build -w client",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:seed": "npm run db:seed -w server",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up --build",
+    "docker:up:demo": "docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build",
+    "docker:down": "docker compose down",
+    "docker:reset": "docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v",
+    "verify:quick": "npm run format:check && npm run lint && npm run typecheck && npm run openapi:validate && npm test && npm run build",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run openapi:validate && npm test && npm run test:integration && npm run test:e2e && npm run test:e2e:fullstack && npm run build"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "yaml": "^2.5.1"
+  }
+}

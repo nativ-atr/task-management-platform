@@ -1,0 +1,26 @@
+services:
+  seed:
+    image: task-platform-api:local
+    build:
+      context: .
+      target: api
+    command: ['node', 'server/dist/src/scripts/seed.js']
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://task_platform:task_platform@postgres:5432/task_platform}
+      CORS_ORIGIN: ${DOCKER_CORS_ORIGIN:-http://localhost:8080}
+      REQUEST_BODY_LIMIT: ${REQUEST_BODY_LIMIT:-256kb}
+      IDEMPOTENCY_RETENTION_HOURS: ${IDEMPOTENCY_RETENTION_HOURS:-24}
+      IDEMPOTENCY_LEASE_SECONDS: ${IDEMPOTENCY_LEASE_SECONDS:-30}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: 'no'
+
+  api:
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully

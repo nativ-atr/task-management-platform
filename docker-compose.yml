@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-task_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-task_platform}
+      POSTGRES_DB: ${POSTGRES_DB:-task_platform}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: task-platform-api:local
+    build:
+      context: .
+      target: api
+    command: ['node', 'server/dist/src/scripts/migrate.js']
+    environment: &api-environment
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://task_platform:task_platform@postgres:5432/task_platform}
+      CORS_ORIGIN: ${DOCKER_CORS_ORIGIN:-http://localhost:8080}
+      REQUEST_BODY_LIMIT: ${REQUEST_BODY_LIMIT:-256kb}
+      IDEMPOTENCY_RETENTION_HOURS: ${IDEMPOTENCY_RETENTION_HOURS:-24}
+      IDEMPOTENCY_LEASE_SECONDS: ${IDEMPOTENCY_LEASE_SECONDS:-30}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    image: task-platform-api:local
+    build:
+      context: .
+      target: api
+    environment: *api-environment
+    init: true
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(''http://127.0.0.1:3000/health/ready'').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  client:
+    image: task-platform-client:local
+    build:
+      context: .
+      target: client
+    ports:
+      - '8080:8080'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/nginx-health']
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
